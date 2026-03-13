@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "location": "Madurai",
+  "date": "09 March 2026",
+  "scraped_at": "2026-03-09 10:28:15 IST",
+  "source_url": "https://www.goodreturns.in/gold-rates/madurai.html",
+  "gold_rates": {
+    "24K": {
+      "price_per_gram": 16309,
+      "currency": "INR",
+      "unit": "gram",
+      "purity": "99.9%"
+    },
+    "22K": {
+      "price_per_gram": 14950,
+      "currency": "INR",
+      "unit": "gram",
+      "purity": "91.6%"
+    },
+    "18K": {
+      "price_per_gram": 13000,
+      "currency": "INR",
+      "unit": "gram",
+      "purity": "75.0%"
+    }
+  }
+}
