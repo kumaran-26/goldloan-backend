@@ -5,14 +5,23 @@ client = MongoClient("mongodb://localhost:27017")
 
 db = client["goldloan_db"]
 
-users_collection = db["users"]
-customers_collection = db["customers"]
-scheme_collection = db["schemes"]
-loans_collection = db["loans"]
-gold_rates_loans_collection = db["gold_rates_loans"]
-historyloans_collection = db["historyloans"]
+users_collection = db["users"]  #user collection
+
+customers_collection = db["customers"]  #customer collection
+
+scheme_collection = db["schemes"] #scheme collection
+
+loan_dues_collection = db["loan_dues"] #loan dues collection
+
+loans_collection = db["loans"] #loans collection
+
+gold_rates_loans_collection = db["gold_rates_loans"] 
+
+historygoldrateloans_collection = db["historyloans"]
+
 staffs_collection = db["staff"]
-gold_collection=db["gold"]
+
 disbursements_collection = db["disbursements"]
 
+transactions_collection = db["transactions"]
 

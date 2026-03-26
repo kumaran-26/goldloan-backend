@@ -13,8 +13,8 @@ def create_scheme(scheme: SchemeSchema,user=Depends(admin_required)):
     scheme_dict = scheme.dict()
 
     scheme_dict["status"] = "active"
-    scheme_dict["created_at"] = datetime.datetime.utcnow()
-    scheme_dict["updated_at"] = datetime.datetime.utcnow()
+    scheme_dict["created_at"] = datetime.utcnow()
+    scheme_dict["updated_at"] = datetime.utcnow()
 
     scheme_collection.insert_one(scheme_dict)
 

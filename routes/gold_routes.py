@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from datetime import datetime
 from bson import ObjectId
 from database.db import gold_rates_loans_collection 
-from database.db import historyloans_collection,gold_collection
+from database.db import historygoldrateloans_collection
 from schemas.gold_rate import GoldLoanSchema, GoldLoanUpdate
 from utils.auth import admin_required
 
@@ -27,7 +27,7 @@ def create_goldloan(data: GoldLoanSchema, user=Depends(admin_required)):
     gold_rates_loans_collection.insert_one(goldloan_dict)
 
     # store history also
-    historyloans_collection.insert_one(goldloan_dict.copy())
+    historygoldrateloans_collection.insert_one(goldloan_dict.copy())
 
     return {"message": "Gold loan configuration created successfully"}
 
@@ -63,13 +63,13 @@ def update_goldloan(id: str, data: GoldLoanUpdate, user=Depends(admin_required))
     
     history_record.pop("_id", None)
 
-    historyloans_collection.insert_one(history_record)
+    historygoldrateloans_collection.insert_one(history_record)
 
     return {"message": "Gold loan updated successfully"}
 
 @router.get("/goldloans/history")
 def get_goldloan_history(user=Depends(admin_required)):     
-    history = list(historyloans_collection.find())
+    history = list(historygoldrateloans_collection.find())
 
     for record in history:
         record["id"] = str(record["_id"])
@@ -88,13 +88,4 @@ def get_goldloan(user=Depends(admin_required)):
     return carats
 
 
-@router.get("/gold-rate")
-def get_gold_rate():
 
-   data = gold_collection.find_one(
-    {},
-    {"_id": 0},
-    sort=[("created_at", -1)]
-)
-
-   return data

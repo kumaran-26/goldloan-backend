@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class GoldLoanSchema(BaseModel):
 
-    carat: Literal["24k", "22k", "18k"]
+    carat: Literal["22k", "18k"]
 
     
 
