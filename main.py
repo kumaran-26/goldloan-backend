@@ -11,10 +11,10 @@ from routes import auth_routes
 from routes import disburse_routes
 from routes import loan_routes
 from routes import scheme_routes
-from routes import gold_routes
+from routes import gold_rate_routes
 from routes import customer_routes
 from routes import staff_routes
-from routes import loandue_routes
+
 from routes import transaction_routes
 
 # Import scheduler
@@ -41,8 +41,8 @@ app.include_router(customer_routes.router)
 app.include_router(staff_routes.router)
 app.include_router(loan_routes.router)
 app.include_router(scheme_routes.router)
-app.include_router(gold_routes.router)
+app.include_router(gold_rate_routes.router)
 app.include_router(disburse_routes.router)  
-app.include_router(loandue_routes.router)
+
 app.include_router(transaction_routes.router)
 

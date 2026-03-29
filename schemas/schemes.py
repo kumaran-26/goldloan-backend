@@ -19,6 +19,8 @@ class SchemeSchema(BaseModel):
 
     total_tenure_months: int = Field(..., gt=0, le=36)
 
+    grace_speed:int=Field(...,gt=0,le=31)
+
     Repayment_type: Literal["bullet", "emi"]
 
 
@@ -44,6 +46,8 @@ class SchemeUpdate(BaseModel):
     total_tenure_months: Optional[int] = Field(None, gt=0, le=36)
 
     minimum_loan_duedate: Optional[int] = Field(None, gt=0, le=10)
+
+    grace_speed:Optional[int]=Field(None, gt=0,le=31)
 
     Repayment_type: Optional[Literal["bullet", "emi"]] = None
 

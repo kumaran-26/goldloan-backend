@@ -46,6 +46,7 @@ class CustomerSchema(BaseModel):
     gender: Literal["male", "female",  "other"]
 
     dob: date
+    age:int
 
     occupation: str
     monthly_income: float
@@ -102,6 +103,8 @@ class CustomerUpdate(BaseModel):
     gender: Optional[Literal["male", "female", "other"]] = None
 
     dob: Optional[date] = None
+
+    age: Optional[int]=None
 
     occupation: Optional[str] = None
     monthly_income: Optional[float] = None

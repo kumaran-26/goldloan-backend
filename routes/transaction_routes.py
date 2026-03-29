@@ -14,135 +14,203 @@ router = APIRouter(prefix="/loan", tags=["Loan Payments"])
 
 
 # =====================================================
-# LEAP YEAR
+# DATE UTILITIES
 # =====================================================
+
 def is_leap_year(date):
+    """Check if year is leap year"""
     y = date.year
     return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
 
 
-def close_loan_if_done(loan_id):
-    pending = loan_dues_collection.count_documents({
-        "loan_id": ObjectId(loan_id),
-        "status": {"$in": ["active", "partial"]}
-    })
-
-    loan = loans_collection.find_one({"_id": ObjectId(loan_id)})
-
-    if not loan:
-        return
-
-    if pending == 0 and round(loan.get("loan_amount", 0), 2) <= 0:
-        loans_collection.update_one(
-            {"_id": ObjectId(loan_id)},
-            {"$set": {
-                "status": "closed",
-                "closed_date": datetime.utcnow()
-            }}
-        )
+def get_days_in_year(date):
+    """Get days in year (365 or 366)"""
+    return 366 if is_leap_year(date) else 365
 
 
-# =====================================================
-# TRANSACTIONS
-# =====================================================
-def create_transactions(loan, loan_id, payment_mode,
-                        interest_paid, principal_paid, penalty_paid, extra):
-
-    now = datetime.utcnow()
-
-    def insert(ptype, amt):
-        if amt <= 0:
-            return
-        transactions_collection.insert_one({
-            "loan_id": ObjectId(loan_id),
-            "loan_no": loan.get("loan_no"),
-            "transaction_type": "credit",
-            "payment_type": ptype,
-            "amount": round(amt, 2),
-            "payment_mode": payment_mode,
-            "transaction_date": now,
-            "created_at": now
-        })
-
-    insert("interest paid", interest_paid)
-    insert("principal paid", principal_paid)
-    insert("penalty paid", penalty_paid)
-    insert("extra payment", extra)
-
-
-# =====================================================
-# PENALTY CALCULATION - BANK STANDARD
-# =====================================================
-def calculate_overdue_penalty(overdue_amount, interest_rate, penalty_rate, due_date, payment_date=None):
+def calculate_actual_days(start_date, end_date):
     """
-    Calculate penalty using Effective Rate (Interest Rate + Penalty Rate)
-    
-    Formula: 
-    Overdue Penalty = Overdue Amount × (Interest Rate + Penalty Rate) × Days Overdue / 365
-    
-    Example 1 (Bullet Loan):
-    Overdue Amount = ₹7,000
-    Interest Rate = 12%
-    Penalty Rate = 3%
-    Effective Rate = 15%
-    Days Overdue = 10
-    Penalty = 7000 × 15% × 10 / 365 = ₹28.77
-    
-    Example 2 (Interest Only):
-    Overdue Amount = ₹982.5
-    Interest Rate = 15%
-    Penalty Rate = 3%
-    Effective Rate = 18%
-    Days Overdue = 10
-    Penalty = 982.5 × 18% × 10 / 365 = ₹4.84
+    Calculate actual number of days between two dates
+    INCLUDING the end date
     """
-    if payment_date is None:
-        payment_date = datetime.utcnow()
+    if not start_date or not end_date:
+        return 0
     
-    if payment_date <= due_date:
+    delta = (end_date - start_date).days + 1
+    return delta
+
+
+def calculate_interest(principal, rate, start_date, end_date):
+    """
+    Calculate total interest for a period using actual days
+    INCLUDES both start and end dates
+    Returns: (interest_amount, days)
+    """
+    if not start_date or not end_date:
         return 0, 0
     
-    days_overdue = (payment_date - due_date).days
-    effective_rate = interest_rate + penalty_rate  # Interest + Penalty
-    
-    # Calculate penalty on overdue amount
-    penalty = (overdue_amount * effective_rate * days_overdue) / (100 * 365)
-    
-    return round(penalty, 2), days_overdue
-
-
-def calculate_emi_overdue_penalty(emi_amount, interest_rate, penalty_rate, due_date, payment_date=None):
-    """
-    Calculate penalty for EMI overdue
-    
-    Formula:
-    Overdue Charge = EMI × (Interest Rate + Penalty Rate) × Days Overdue / 365
-    
-    Example:
-    EMI = ₹3,800
-    Interest Rate = 15%
-    Penalty Rate = 3%
-    Effective Rate = 18%
-    Days Overdue = 10
-    Penalty = 3800 × 18% × 10 / 365 = ₹18.74
-    """
-    if payment_date is None:
-        payment_date = datetime.utcnow()
-    
-    if payment_date <= due_date:
+    days = calculate_actual_days(start_date, end_date)
+    if days <= 0:
         return 0, 0
     
-    days_overdue = (payment_date - due_date).days
-    effective_rate = interest_rate + penalty_rate
+    days_in_year = get_days_in_year(end_date)
+    interest = (principal * rate * days) / (100 * days_in_year)
+    return round(interest, 2), days
+
+
+def calculate_interest_for_period(principal, rate, start_date, end_date):
+    """
+    Calculate total interest for a period using actual days
+    INCLUDES both start and end dates
+    """
+    if not start_date or not end_date:
+        return 0
     
-    penalty = (emi_amount * effective_rate * days_overdue) / (100 * 365)
+    days = calculate_actual_days(start_date, end_date)
+    if days <= 0:
+        return 0
     
-    return round(penalty, 2), days_overdue
+    days_in_year = get_days_in_year(end_date)
+    interest = (principal * rate * days) / (100 * days_in_year)
+    return round(interest, 2)
+
+
+def calculate_daily_interest(principal, rate, date):
+    """
+    Calculate daily interest based on actual days in year
+    """
+    days_in_year = get_days_in_year(date)
+    daily_interest = (principal * rate) / (100 * days_in_year)
+    return round(daily_interest, 4)
+
+
+def validate_date(date):
+    """Adjust invalid dates"""
+    if not date:
+        return date
+    
+    try:
+        day = date.day
+        month = date.month
+        year = date.year
+        
+        if month == 2 and day > 28:
+            if is_leap_year(date):
+                return date.replace(day=29)
+            else:
+                return date.replace(day=28)
+        
+        if month == 4 and day == 31:
+            return date.replace(day=30)
+        
+        if month in [6, 9, 11] and day == 31:
+            return date.replace(day=30)
+        
+        return date
+    except:
+        return date
+
+
+def calculate_next_due_date(start_date, tenure_months):
+    """Calculate next due date with proper month-end handling"""
+    due_date = start_date + relativedelta(months=tenure_months)
+    return validate_date(due_date)
+
+
+def calculate_grace_period_end_date(due_date, grace_days):
+    """
+    Calculate the end date of grace period
+    Grace period end = due_date + grace_days
+    """
+    if not due_date or grace_days <= 0:
+        return due_date
+    
+    return due_date + timedelta(days=grace_days)
+
+
+def calculate_total_overdue_days(due_date, current_date=None):
+    """
+    Calculate total overdue days INCLUDING all days from due date
+    This counts EVERY day from due date to current date (inclusive)
+    """
+    if current_date is None:
+        current_date = datetime.utcnow()
+    
+    if not due_date:
+        return 0
+    
+    if current_date <= due_date:
+        return 0
+    
+    total_overdue_days = calculate_actual_days(due_date, current_date)
+    return total_overdue_days
+
+
+def calculate_penalty(interest_due, penalty_rate, due_date, current_date=None):
+    """
+    Calculate penalty based on total overdue days INCLUDING grace period
+    Penalty applies to ALL overdue days including grace period
+    """
+    if current_date is None:
+        current_date = datetime.utcnow()
+    
+    overdue_days = calculate_total_overdue_days(due_date, current_date)
+    
+    if overdue_days <= 0 or interest_due <= 0 or penalty_rate <= 0:
+        return 0, overdue_days
+    
+    penalty = (interest_due * penalty_rate * overdue_days) / (100 * 365)
+    return round(penalty, 2), overdue_days
+
+
+def calculate_penalty_with_grace(interest_due, penalty_rate, due_date, grace_days, current_date=None):
+    """
+    Calculate penalty considering grace period
+    Penalty applies only to days AFTER grace period
+    
+    Formula: Penalty = (Interest Due × Penalty Rate × Overdue Days) / (365 × 100)
+    """
+    if current_date is None:
+        current_date = datetime.utcnow()
+    
+    # Calculate grace period end date
+    grace_end_date = calculate_grace_period_end_date(due_date, grace_days)
+    
+    # Calculate overdue days after grace period
+    if current_date <= grace_end_date:
+        overdue_days = 0
+    else:
+        overdue_days = (current_date - grace_end_date).days
+    
+    if overdue_days <= 0 or interest_due <= 0 or penalty_rate <= 0:
+        return 0, overdue_days
+    
+    penalty = (interest_due * penalty_rate * overdue_days) / (100 * 365)
+    return round(penalty, 2), overdue_days
+
+
+def calculate_days_covered_by_interest(interest_paid, daily_interest, max_days=None):
+    """
+    Calculate how many days are covered by interest payment
+    """
+    if daily_interest <= 0 or interest_paid <= 0:
+        return 0
+    
+    days_covered = int(interest_paid / daily_interest)
+    
+    if max_days and days_covered > max_days:
+        days_covered = max_days
+    
+    if days_covered == 0 and interest_paid > 0:
+        days_covered = 1
+    
+    return days_covered
 
 
 # =====================================================
-# MAIN API - ADMIN ONLY
+# MAIN API
 # =====================================================
+
 @router.post("/pay/{loan_id}", dependencies=[Depends(admin_required)])
 def pay_loan(
     loan_id: str, 
@@ -151,7 +219,8 @@ def pay_loan(
 ):
     """
     Process loan payment
-    🔐 ADMIN ONLY ACCESS
+    Interest accrues for ALL days including grace period
+    Overdue includes grace period days for penalty calculation
     """
     if amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid amount")
@@ -175,15 +244,431 @@ def pay_loan(
         return handle_emi_payment(loan, scheme, loan_id, amount, payment_mode)
     else:
         return handle_bullet_payment(loan, scheme, loan_id, amount, payment_mode)
-    
+
 
 # =====================================================
-# EMI PAYMENT HANDLER WITH CORRECT PENALTY
+# BULLET PAYMENT HANDLER
 # =====================================================
+
+def handle_bullet_payment(loan, scheme, loan_id, amount, payment_mode):
+    """
+    Complete bullet loan payment handler with grace period support
+    """
+    today = datetime.utcnow()
+    remaining = amount
+    
+    total_interest_paid = 0
+    total_principal_paid = 0
+    total_penalty_paid = 0
+    
+    # GET CURRENT ACTIVE DUE
+    due = loan_dues_collection.find_one(
+        {"loan_id": ObjectId(loan_id), "status": {"$in": ["pending", "active"]}},
+        sort=[("created_at", -1)]
+    )
+    
+    if not due:
+        raise HTTPException(status_code=400, detail="No pending due found")
+    
+    # Get current loan details
+    principal = due.get("principal", 0)
+    rate = due.get("interest_rate", 0)
+    penalty_rate = due.get("penalty_rate", scheme.get("penalty_percent", 0))
+    grace_days = due.get("grace_days", scheme.get("grace_speed", 0))  # Use grace_speed from scheme
+    tenure_months = scheme.get("tenure_months", 1)
+    total_tenure_months = scheme.get("total_tenure_months", 24)
+    maturity_date = due.get("maturity_date")
+    
+    # Get dates
+    interest_start = due.get("interest_start_date")
+    regular_due_date = due.get("due_date")
+    
+    # =====================================================
+    # STEP 1: Calculate Interest for ACTUAL DAYS
+    # =====================================================
+    total_interest, days = calculate_interest(principal, rate, interest_start, today)
+    
+    if days < 1:
+        days = 1
+    
+    # Calculate daily interest
+    daily_interest = total_interest / days if days > 0 else 0
+    
+    # =====================================================
+    # STEP 2: Calculate Penalty ONLY on Overdue Days AFTER Grace
+    # =====================================================
+    penalty_amount, overdue_days = calculate_penalty_with_grace(
+        total_interest, 
+        penalty_rate, 
+        regular_due_date, 
+        grace_days, 
+        today
+    )
+    
+    # Get existing penalty paid
+    penalty_paid_already = due.get("penalty_paid", 0)
+    penalty_due = max(0, penalty_amount - penalty_paid_already)
+    
+    # =====================================================
+    # STEP 3: Payment Priority (Penalty → Interest → Principal)
+    # =====================================================
+    
+    # Pay penalty first
+    penalty_paid_now = min(remaining, penalty_due)
+    remaining -= penalty_paid_now
+    total_penalty_paid = penalty_paid_now
+    
+    # Pay interest
+    interest_paid = min(remaining, total_interest)
+    remaining -= interest_paid
+    total_interest_paid = interest_paid
+    
+    interest_balance = total_interest - interest_paid
+    
+    # Pay principal (only if interest fully paid)
+    principal_paid = 0
+    if interest_balance == 0 and remaining > 0:
+        principal_paid = min(remaining, principal)
+        remaining -= principal_paid
+        principal -= principal_paid
+        total_principal_paid = principal_paid
+        
+        loans_collection.update_one(
+            {"_id": ObjectId(loan_id)},
+            {"$set": {"loan_amount": round(principal, 2)}}
+        )
+    
+    # =====================================================
+    # STEP 4: Calculate Days Covered by Interest Payment
+    # =====================================================
+    days_covered = 0
+    if daily_interest > 0 and interest_paid > 0:
+        days_covered_float = interest_paid / daily_interest
+        days_covered = int(days_covered_float)
+        
+        if days_covered == 0 and interest_paid > 0:
+            days_covered = 1
+    
+    # =====================================================
+    # STEP 5: Calculate Regular Cycle Days
+    # =====================================================
+    regular_cycle_days = 0
+    if regular_due_date and interest_start:
+        regular_cycle_days = calculate_actual_days(interest_start, regular_due_date)
+    
+    # =====================================================
+    # STEP 6: Determine New Interest Start and Due Dates
+    # =====================================================
+    new_interest_start = interest_start
+    new_regular_due_date = regular_due_date
+    
+    # Calculate next cycle's interest amount
+    next_interest_due = 0
+    
+    if interest_balance == 0:
+        # Full interest paid for the period
+        if days_covered > regular_cycle_days and regular_cycle_days > 0:
+            # Paid for more days than the cycle - carry forward extra days
+            extra_days = days_covered - regular_cycle_days
+            new_interest_start = regular_due_date + timedelta(days=extra_days)
+            new_interest_start = validate_date(new_interest_start)
+            new_regular_due_date = new_interest_start + relativedelta(months=tenure_months)
+        else:
+            # Normal case - start new cycle from today
+            new_interest_start = today
+            new_regular_due_date = today + relativedelta(months=tenure_months)
+        
+        # Calculate interest for the next cycle
+        if principal > 0:
+            # Calculate days in next cycle
+            next_cycle_days = calculate_actual_days(new_interest_start, new_regular_due_date)
+            if next_cycle_days < 1:
+                next_cycle_days = 1
+            
+            # Calculate total interest for next cycle
+            next_interest_due = calculate_interest_for_period(principal, rate, new_interest_start, new_regular_due_date)
+        else:
+            next_interest_due = 0
+            
+    else:
+        # Partial interest paid - shift dates by days covered
+        new_interest_start = interest_start + timedelta(days=days_covered)
+        new_regular_due_date = regular_due_date + timedelta(days=days_covered)
+        
+        # Don't let new_interest_start go beyond today
+        if new_interest_start > today:
+            new_interest_start = today
+        
+        # For partial payment, the remaining interest is carried forward
+        next_interest_due = interest_balance
+    
+    new_interest_start = validate_date(new_interest_start)
+    new_regular_due_date = validate_date(new_regular_due_date)
+    
+    # =====================================================
+    # STEP 7: Apply Maturity Limit
+    # =====================================================
+    if new_regular_due_date > maturity_date:
+        new_regular_due_date = maturity_date
+    
+    # =====================================================
+    # STEP 8: Check if this is the final cycle
+    # =====================================================
+    current_cycle = due.get("cycle_number", 1)
+    total_cycles = due.get("total_cycles", (total_tenure_months // tenure_months) if tenure_months > 0 else 1)
+    is_final_cycle = False
+    
+    if new_regular_due_date >= maturity_date:
+        is_final_cycle = True
+        # For final cycle, include principal in due
+        next_interest_due = next_interest_due + principal
+    elif new_regular_due_date + relativedelta(months=tenure_months) > maturity_date:
+        # Next cycle would go beyond maturity, so this is the last interest cycle
+        is_final_cycle = True
+        # Adjust due date to maturity date
+        new_regular_due_date = maturity_date
+        # Recalculate interest for final period
+        if principal > 0 and new_interest_start:
+            next_interest_due = calculate_interest_for_period(principal, rate, new_interest_start, new_regular_due_date)
+    
+    # =====================================================
+    # STEP 9: Check Auction Logic
+    # =====================================================
+    loan_status = "active"
+    if today >= maturity_date and principal > 0:
+        loan_status = "auction_pending"
+        loans_collection.update_one(
+            {"_id": ObjectId(loan_id)},
+            {"$set": {"status": "auction_pending"}}
+        )
+    
+    # =====================================================
+    # STEP 10: Final Pending Calculation
+    # =====================================================
+    new_penalty_remaining = penalty_due - penalty_paid_now
+    
+    # For current due, pending is principal + interest_balance + penalty
+    pending_current = principal + interest_balance + new_penalty_remaining
+    
+    # =====================================================
+    # STEP 11: Update Current Due Status
+    # =====================================================
+    new_penalty_paid_total = due.get("penalty_paid", 0) + penalty_paid_now
+    
+    # Calculate grace end date for display
+    grace_end_date = calculate_grace_period_end_date(regular_due_date, grace_days)
+    
+    loan_dues_collection.update_one(
+        {"_id": due["_id"]},
+        {"$set": {
+            "status": "paid",
+            "paid_date": today,
+            "interest_paid": round(interest_paid, 2),
+            "principal_paid": round(principal_paid, 2),
+            "penalty_paid": round(new_penalty_paid_total, 2),
+            "penalty_due": round(penalty_amount, 2),
+            "days_calculated": days,
+            "days_covered": days_covered,
+            "regular_cycle_days": regular_cycle_days,
+            "paid_days": days_covered,
+            "extra_days_carried": max(0, days_covered - regular_cycle_days) if regular_cycle_days > 0 else 0,
+            "overdue_days_after_grace": overdue_days,
+            "grace_days": grace_days,
+            "grace_end_date": grace_end_date,
+            "within_grace": overdue_days == 0,
+            "pending_amount": round(pending_current, 2)
+        }}
+    )
+    
+    # =====================================================
+    # STEP 12: Check Full Loan Closure
+    # =====================================================
+    if (principal <= 0 or is_final_cycle) and interest_balance <= 0 and new_penalty_remaining <= 0:
+        loans_collection.update_one(
+            {"_id": ObjectId(loan_id)},
+            {"$set": {
+                "status": "closed",
+                "closed_date": today
+            }}
+        )
+        
+        create_transactions(
+            loan, loan_id, payment_mode,
+            total_interest_paid, total_principal_paid, total_penalty_paid, 0
+        )
+        
+        return {
+            "type": "BULLET",
+            "message": "Loan Closed Successfully",
+            "scenario": "FULL_LOAN_CLOSURE",
+            "interest_paid": round(total_interest_paid, 2),
+            "principal_paid": round(total_principal_paid, 2),
+            "penalty_paid": round(total_penalty_paid, 2),
+            "grace_days": grace_days,
+            "overdue_days_after_grace": overdue_days,
+            "within_grace": overdue_days == 0,
+            "loan_status": "closed"
+        }
+    
+    # =====================================================
+    # STEP 13: Create Next Due if Loan Not Closed
+    # =====================================================
+    next_due = {
+        "loan_id": due["loan_id"],
+        "loan_no": due["loan_no"],
+        "customer_id": due["customer_id"],
+        "customer_name": due["customer_name"],
+        "customer_code": due.get("customer_code"),
+        
+        # Principal details
+        "principal": round(principal, 2),
+        "interest_rate": rate,
+        
+        # Calculate daily interest for next cycle
+        "interest_per_day": round(calculate_daily_interest(principal, rate, new_regular_due_date), 4) if principal > 0 else 0,
+        
+        # Cycle information
+        "cycle_number": current_cycle + 1,
+        "total_cycles": total_cycles,
+        "is_final_cycle": is_final_cycle,
+        
+        # Grace period
+        "grace_days": grace_days,
+        "penalty_rate": penalty_rate,
+        
+        # Dates
+        "loan_start_date": due.get("loan_start_date"),
+        "interest_start_date": new_interest_start,
+        "due_date": new_regular_due_date,
+        "regular_due_date": new_regular_due_date,
+        "cycle_end_date_with_grace": calculate_grace_period_end_date(new_regular_due_date, grace_days),
+        "maturity_date": maturity_date,
+        
+        # Interest tracking
+        "interest_due": round(next_interest_due, 2),
+        "interest_paid": 0,
+        "principal_paid": 0,
+        
+        # Penalty tracking
+        "penalty_due": 0,
+        "penalty_paid": 0,
+        
+        # Additional metrics
+        "regular_days": calculate_actual_days(new_interest_start, new_regular_due_date),
+        "days_in_cycle_with_grace": calculate_actual_days(new_interest_start, calculate_grace_period_end_date(new_regular_due_date, grace_days)),
+        
+        # Status
+        "pending_amount": round(next_interest_due, 2),
+        "status": "pending",
+        "overdue_days_after_grace": 0,
+        "within_grace": True,
+        "created_at": today
+    }
+    
+    loan_dues_collection.insert_one(next_due)
+    
+    # =====================================================
+    # STEP 14: Create Transaction Records
+    # =====================================================
+    create_transactions(
+        loan,
+        loan_id,
+        payment_mode,
+        total_interest_paid,
+        total_principal_paid,
+        total_penalty_paid,
+        0
+    )
+    
+    # =====================================================
+    # STEP 15: Response with Grace Period Details
+    # =====================================================
+    return {
+        "type": "BULLET",
+        "interest_paid": round(total_interest_paid, 2),
+        "principal_paid": round(total_principal_paid, 2),
+        "penalty_paid": round(total_penalty_paid, 2),
+        "interest_remaining": round(interest_balance, 2),
+        "principal_remaining": round(principal, 2),
+        "penalty_remaining": round(new_penalty_remaining, 2),
+        "next_interest_due": round(next_interest_due, 2),
+        "days_calculated": days,
+        "days_covered": days_covered,
+        "grace_days": grace_days,
+        "overdue_days_after_grace": overdue_days,
+        "within_grace": overdue_days == 0,
+        "penalty_rate": penalty_rate,
+        "daily_interest": round(daily_interest, 4),
+        "new_daily_interest": round(calculate_daily_interest(principal, rate, new_regular_due_date), 4) if principal > 0 else 0,
+        "old_interest_start": interest_start,
+        "new_interest_start": new_interest_start,
+        "old_due_date": regular_due_date,
+        "new_due_date": new_regular_due_date,
+        "grace_end_date": grace_end_date,
+        "new_grace_end_date": calculate_grace_period_end_date(new_regular_due_date, grace_days),
+        "maturity_date": maturity_date,
+        "current_cycle": current_cycle,
+        "next_cycle": current_cycle + 1,
+        "is_final_cycle": is_final_cycle,
+        "pending": round(pending_current, 2),
+        "loan_status": loan_status,
+        "message": get_bullet_message_with_grace(
+            total_interest_paid, total_interest, total_principal_paid, 
+            total_penalty_paid, days_covered, days, 
+            overdue_days, grace_days, days_covered, regular_cycle_days, principal,
+            penalty_amount, regular_due_date, grace_end_date, next_interest_due
+        )
+    }
+
+
+def get_bullet_message_with_grace(interest_paid, total_interest, principal_paid, 
+                                   penalty_paid, days_covered, total_days, 
+                                   overdue_days, grace_days, paid_days, 
+                                   cycle_days, principal_remaining, penalty_amount,
+                                   due_date, grace_end_date, next_interest_due):
+    """
+    Generate user-friendly message with grace period info
+    """
+    if penalty_paid > 0:
+        if overdue_days > 0:
+            return f"Payment with penalty. Grace period of {grace_days} days ended on {grace_end_date.strftime('%d-%b-%Y')}. Overdue by {overdue_days} days. Penalty ₹{penalty_paid} applied. Interest ₹{interest_paid} paid."
+        else:
+            return f"Payment processed. Penalty ₹{penalty_paid} applied."
+    
+    if overdue_days == 0 and grace_days > 0:
+        return f"Payment within {grace_days} days grace period (due date: {due_date.strftime('%d-%b-%Y')}, grace until: {grace_end_date.strftime('%d-%b-%Y')}). No penalty applied. Next interest due: ₹{round(next_interest_due, 2)}"
+    
+    if interest_paid == total_interest and paid_days > cycle_days and cycle_days > 0:
+        extra_days = paid_days - cycle_days
+        return f"Paid full interest covering {paid_days} days (current cycle {cycle_days} days + {extra_days} extra days carried forward). Next interest due: ₹{round(next_interest_due, 2)}"
+    
+    if interest_paid == total_interest:
+        if principal_paid > 0:
+            return f"Paid full interest ₹{interest_paid} + ₹{principal_paid} principal reduction. Next interest due: ₹{round(next_interest_due, 2)}"
+        else:
+            return f"Paid full interest ₹{interest_paid}. Reset cycle starting today. Next interest due: ₹{round(next_interest_due, 2)}"
+    
+    if 0 < interest_paid < total_interest:
+        return f"Paid ₹{interest_paid} interest covering {days_covered} out of {total_days} days. Remaining interest: ₹{round(total_interest - interest_paid, 2)}"
+    
+    if total_days == 1:
+        return f"Same day payment: ₹{interest_paid} interest paid. Next interest due: ₹{round(next_interest_due, 2)}"
+    
+    if interest_paid == 0 and principal_paid > 0:
+        return f"Direct principal reduction of ₹{principal_paid}. Next interest due: ₹{round(next_interest_due, 2)}"
+    
+    return f"Payment processed successfully. Next interest due: ₹{round(next_interest_due, 2)}"
+
+
+# =====================================================
+# EMI PAYMENT HANDLER
+# =====================================================
+
 def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
     """
-    Handle EMI loan payments with correct penalty calculation
-    Penalty uses Effective Rate = Interest Rate + Penalty Rate
+    Handle EMI loan payments
+    Interest includes grace period days
+    Overdue includes grace period days for penalty
     """
     today = datetime.utcnow()
     remaining = amount
@@ -204,9 +689,11 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
     if not pending_emis:
         raise HTTPException(status_code=400, detail="No pending dues found")
     
-    # Get interest rate and penalty rate from scheme
-    interest_rate = scheme.get("interest_rate", 0)
+    # Get rates from scheme
     penalty_rate = scheme.get("penalty_percent", 0)
+    grace_days = scheme.get("grace_speed", 0)  # Use grace_speed from scheme
+    
+    total_overdue_days = 0
     
     # Process current EMI and any pending from previous months
     for idx, current_due in enumerate(pending_emis):
@@ -216,17 +703,20 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
         # Get current EMI details
         interest_due = current_due.get("interest_due", 0) - current_due.get("interest_paid", 0)
         principal_due = current_due.get("principal_due", 0) - current_due.get("principal_paid", 0)
-        emi_total = interest_due + principal_due
         
-        # ✅ Calculate penalty using Effective Rate method
+        # Get due date and calculate penalty (includes grace days)
         due_date = current_due.get("due_date")
-        penalty_amount, overdue_days = calculate_emi_overdue_penalty(
-            emi_total,
-            interest_rate,
-            penalty_rate,
-            due_date,
+        
+        # Calculate penalty based on total overdue days INCLUDING grace days
+        penalty_amount, overdue_days = calculate_penalty_with_grace(
+            interest_due, 
+            penalty_rate, 
+            due_date, 
+            grace_days, 
             today
         )
+        
+        total_overdue_days += overdue_days
         
         # Get existing penalty paid
         penalty_paid_already = current_due.get("penalty_paid", 0)
@@ -265,13 +755,12 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
             "interest_paid": round(new_interest_paid, 2),
             "principal_paid": round(new_principal_paid, 2),
             "penalty_paid": round(new_penalty_paid, 2),
-            "penalty_due": penalty_amount,  # Store calculated penalty
+            "penalty_due": round(penalty_amount, 2),
             "paid_amount": round(new_paid_amount, 2),
             "pending_amount": round(pending, 2),
             "status": status,
             "last_paid_date": today,
-            "overdue_days": overdue_days,
-            "effective_rate_applied": interest_rate + penalty_rate
+            "overdue_days": overdue_days
         }
         
         if status == "paid":
@@ -286,94 +775,18 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
         total_principal_paid += principal_paid
         total_penalty_paid += penalty_paid
         
-        # If current EMI is fully paid and there's excess, handle next EMI
-        if status == "paid" and remaining > 0 and idx < len(pending_emis) - 1:
-            # Get next EMI
-            next_due = pending_emis[idx + 1]
+        # Handle excess payment after all EMIs are paid
+        if remaining > 0 and idx == len(pending_emis) - 1 and status == "paid":
+            current_principal = loan.get("loan_amount", 0)
+            new_principal = max(0, current_principal - remaining)
             
-            # Get next EMI details
-            next_interest_due = next_due.get("interest_due", 0) - next_due.get("interest_paid", 0)
-            next_principal_due = next_due.get("principal_due", 0) - next_due.get("principal_paid", 0)
-            next_emi_total = next_interest_due + next_principal_due
+            loans_collection.update_one(
+                {"_id": ObjectId(loan_id)},
+                {"$set": {"loan_amount": round(new_principal, 2)}}
+            )
             
-            if remaining >= next_emi_total:
-                # Pay full next EMI
-                remaining -= next_emi_total
-                
-                # Mark next EMI as paid
-                loan_dues_collection.update_one(
-                    {"_id": next_due["_id"]},
-                    {"$set": {
-                        "interest_paid": round(next_interest_due, 2),
-                        "principal_paid": round(next_principal_due, 2),
-                        "paid_amount": round(next_emi_total, 2),
-                        "pending_amount": 0,
-                        "status": "paid",
-                        "paid_date": today,
-                        "last_paid_date": today
-                    }}
-                )
-                
-                total_interest_paid += next_interest_due
-                total_principal_paid += next_principal_due
-            else:
-                # Partial payment on next EMI
-                if remaining <= next_interest_due:
-                    # Only pay part of interest
-                    interest_to_pay = remaining
-                    principal_to_pay = 0
-                    remaining = 0
-                else:
-                    # Pay full interest and part of principal
-                    interest_to_pay = next_interest_due
-                    remaining -= next_interest_due
-                    principal_to_pay = min(remaining, next_principal_due)
-                    remaining -= principal_to_pay
-                
-                # Update next EMI
-                new_next_interest_paid = next_due.get("interest_paid", 0) + interest_to_pay
-                new_next_principal_paid = next_due.get("principal_paid", 0) + principal_to_pay
-                new_next_paid = next_due.get("paid_amount", 0) + (interest_to_pay + principal_to_pay)
-                
-                next_pending = (next_interest_due - interest_to_pay) + (next_principal_due - principal_to_pay)
-                next_status = "partial" if next_pending > 0 else "paid"
-                
-                loan_dues_collection.update_one(
-                    {"_id": next_due["_id"]},
-                    {"$set": {
-                        "interest_paid": round(new_next_interest_paid, 2),
-                        "principal_paid": round(new_next_principal_paid, 2),
-                        "paid_amount": round(new_next_paid, 2),
-                        "pending_amount": round(next_pending, 2),
-                        "status": next_status,
-                        "last_paid_date": today
-                    }}
-                )
-                
-                if next_status == "paid":
-                    loan_dues_collection.update_one(
-                        {"_id": next_due["_id"]},
-                        {"$set": {"paid_date": today}}
-                    )
-                
-                total_interest_paid += interest_to_pay
-                total_principal_paid += principal_to_pay
-                
-                break  # No more money to pay
-    
-    # Handle excess payment after all EMIs are paid
-    if remaining > 0:
-        # Reduce overall loan principal
-        current_principal = loan.get("loan_amount", 0)
-        new_principal = max(0, current_principal - remaining)
-        
-        loans_collection.update_one(
-            {"_id": ObjectId(loan_id)},
-            {"$set": {"loan_amount": round(new_principal, 2)}}
-        )
-        
-        total_principal_paid += remaining
-        remaining = 0
+            total_principal_paid += remaining
+            remaining = 0
     
     # Create transaction records
     create_transactions(
@@ -392,7 +805,9 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
         "status": {"$in": ["pending", "partial"]}
     })
     
+    loan_status = "active"
     if pending_dues_count == 0:
+        loan_status = "closed"
         loans_collection.update_one(
             {"_id": ObjectId(loan_id)},
             {"$set": {
@@ -401,7 +816,15 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
             }}
         )
     
-    updated_loan = loans_collection.find_one({"_id": ObjectId(loan_id)})
+    # Generate message
+    message = "Payment processed successfully."
+    if total_overdue_days > 0:
+        message = f"Payment processed. Overdue by {total_overdue_days} days (including {grace_days} grace days). Penalty ₹{total_penalty_paid} applied."
+    elif grace_days > 0:
+        message = f"Payment processed within {grace_days} days grace period. No penalty applied."
+    
+    if pending_dues_count == 0:
+        message = "Loan closed successfully! " + message
     
     return {
         "type": "EMI",
@@ -410,317 +833,38 @@ def handle_emi_payment(loan, scheme, loan_id, amount, payment_mode):
         "penalty_paid": round(total_penalty_paid, 2),
         "total_paid": round(total_interest_paid + total_principal_paid + total_penalty_paid, 2),
         "pending_emis": pending_dues_count,
-        "loan_status": updated_loan.get("status", "active") if updated_loan else "unknown",
-        "message": "Loan closed successfully!" if pending_dues_count == 0 else "Payment processed successfully."
+        "grace_days": grace_days,
+        "total_overdue_days": total_overdue_days,
+        "loan_status": loan_status,
+        "message": message
     }
 
 
 # =====================================================
-# BULLET PAYMENT HANDLER WITH CORRECT PENALTY
+# TRANSACTIONS
 # =====================================================
-def handle_bullet_payment(loan, scheme, loan_id, amount, payment_mode):
-    """
-    Bullet loan payment handler with correct penalty calculation
-    Penalty uses Effective Rate = Interest Rate + Penalty Rate on overdue principal
-    """
-    today = datetime.utcnow()
-    remaining = amount
-    
-    total_interest_paid = 0
-    total_principal_paid = 0
-    total_penalty_paid = 0
-    
-    # GET CURRENT ACTIVE DUE
-    due = loan_dues_collection.find_one(
-        {"loan_id": ObjectId(loan_id), "status": "active"},
-        sort=[("created_at", -1)]
-    )
-    
-    if not due:
-        raise HTTPException(status_code=400, detail="No active due found")
-    
-    # Get current loan details
-    principal = due.get("principal", 0)
-    rate = due.get("interest_rate", 0)  # Base interest rate
-    penalty_rate = scheme.get("penalty_percent", 0)
-    tenure_months = scheme.get("tenure_months", 3)
-    
-    # Get due dates
-    interest_start = due.get("interest_start_date")
-    overdue_date = due.get("overdue_date")
-    maturity_date = due.get("maturity_date")
-    
-    # =====================================================
-    # CALCULATE ACCRUED INTEREST (Regular Interest)
-    # =====================================================
-    days_diff = (today - interest_start).days
-    days = max(days_diff, 1)
-    
-    days_in_year = 366 if is_leap_year(today) else 365
-    daily_interest = (principal * rate) / (100 * days_in_year)
-    total_interest = daily_interest * days
-    
-    # =====================================================
-    # CALCULATE OVERDUE PENALTY (Effective Rate Method)
-    # =====================================================
-    penalty = 0
-    overdue_days = 0
-    
-    if today > overdue_date:
-        # Overdue amount = Principal (in bullet loans)
-        overdue_amount = principal
-        overdue_days = (today - overdue_date).days
-        
-        # ✅ CORRECT FORMULA: Penalty on overdue principal with effective rate
-        effective_rate = rate + penalty_rate
-        penalty = (overdue_amount * effective_rate * overdue_days) / (100 * 365)
-        penalty = round(penalty, 2)
-    
-    # =====================================================
-    # PAYMENT ALLOCATION: Penalty → Interest → Principal
-    # =====================================================
-    
-    # 1. Pay penalty first
-    penalty_paid_now = min(remaining, penalty)
-    remaining -= penalty_paid_now
-    
-    # 2. Pay interest (accrued from start date)
-    interest_paid = min(remaining, total_interest)
-    remaining -= interest_paid
-    
-    interest_balance = total_interest - interest_paid
-    
-    # 3. Pay principal (only if interest fully paid)
-    principal_paid = 0
-    if interest_balance == 0 and remaining > 0:
-        principal_paid = min(remaining, principal)
-        remaining -= principal_paid
-        principal -= principal_paid
-        
-        # Update loan principal in loans collection
-        loans_collection.update_one(
-            {"_id": ObjectId(loan_id)},
-            {"$set": {"loan_amount": round(principal, 2)}}
-        )
-    
-    # =====================================================
-    # DAYS COVERED CALCULATION
-    # =====================================================
-    days_covered = 0
-    if daily_interest > 0 and interest_paid > 0:
-        days_covered_float = interest_paid / daily_interest
-        days_covered = int(days_covered_float)
-    
-    # =====================================================
-    # DATE SHIFT LOGIC
-    # =====================================================
-    if interest_balance == 0:
-        # Full interest paid - reset cycle
-        new_interest_start = today
-        new_overdue_date = today + relativedelta(months=tenure_months)
-    else:
-        # Partial interest paid - shift forward
-        new_interest_start = interest_start + timedelta(days=days_covered)
-        new_overdue_date = overdue_date + timedelta(days=days_covered)
-        
-        if new_interest_start > today:
-            new_interest_start = today
-    
-    # MATURITY LIMIT CHECK
-    if new_overdue_date > maturity_date:
-        new_overdue_date = maturity_date
-    
-    # =====================================================
-    # RECALCULATE DAILY INTEREST
-    # =====================================================
-    if principal > 0:
-        new_daily_interest = (principal * rate) / (100 * days_in_year)
-    else:
-        new_daily_interest = 0
-    
-    # =====================================================
-    # FINAL PENDING CALCULATION
-    # =====================================================
-    new_penalty_remaining = penalty - penalty_paid_now
-    pending = principal + interest_balance + new_penalty_remaining
-    
-    # =====================================================
-    # UPDATE CURRENT DUE STATUS
-    # =====================================================
-    new_penalty_paid_total = due.get("penalty_paid", 0) + penalty_paid_now
-    
-    loan_dues_collection.update_one(
-        {"_id": due["_id"]},
-        {"$set": {
-            "status": "paid",
-            "paid_date": today,
-            "interest_paid": round(interest_paid, 2),
-            "principal_paid": round(principal_paid, 2),
-            "penalty_paid": round(new_penalty_paid_total, 2),
-            "penalty_due": penalty,  # Store calculated penalty
-            "days_covered": days_covered,
-            "total_days": days,
-            "overdue_days": overdue_days,
-            "pending_amount": round(pending, 2),
-            "effective_rate_applied": rate + penalty_rate
-        }}
-    )
-    
-    # =====================================================
-    # LOAN CLOSURE CHECK
-    # =====================================================
-    if principal <= 0 and interest_balance <= 0 and new_penalty_remaining <= 0:
-        loans_collection.update_one(
-            {"_id": ObjectId(loan_id)},
-            {"$set": {
-                "status": "closed",
-                "closed_date": today
-            }}
-        )
-        
-        # Mark any remaining dues as paid
-        loan_dues_collection.update_many(
-            {"loan_id": ObjectId(loan_id), "status": "active"},
-            {"$set": {
-                "status": "paid",
-                "paid_date": today
-            }}
-        )
-        
-        create_transactions(
-            loan, loan_id, payment_mode,
-            interest_paid, principal_paid, penalty_paid_now, 0
-        )
-        
-        return {
-            "type": "BULLET",
-            "message": "Loan Closed Successfully",
-            "interest_paid": round(interest_paid, 2),
-            "principal_paid": round(principal_paid, 2),
-            "penalty_paid": round(penalty_paid_now, 2),
-            "overdue_days": overdue_days,
-            "effective_rate": round(rate + penalty_rate, 2),
-            "loan_status": "closed"
-        }
-    
-    # =====================================================
-    # CREATE NEXT DUE (If loan still active)
-    # =====================================================
-    next_due = {
-        "loan_id": due["loan_id"],
-        "loan_no": due["loan_no"],
-        "customer_id": due["customer_id"],
-        "customer_name": due["customer_name"],
-        "customer_code": due.get("customer_code"),
-        
-        # Principal details
-        "principal": round(principal, 2),
-        "interest_rate": rate,
-        "interest_for_oneday": round(new_daily_interest, 4),
-        
-        # Dates
-        "loan_start_date": due.get("loan_start_date"),
-        "interest_start_date": new_interest_start,
-        "overdue_date": new_overdue_date,
-        "maturity_date": maturity_date,
-        
-        # Interest tracking
-        "interest_due": round(interest_balance, 2),
-        "interest_paid": 0,
-        "principal_paid": 0,
-        
-        # Penalty tracking for next cycle
-        "penalty_due": 0,
-        "penalty_paid": 0,
-        "penalty_rate_applied": penalty_rate,
-        "effective_rate_applied": rate + penalty_rate,
-        "overdue_days": 0,
-        "last_penalty_update": None,
-        
-        # Status
-        "pending_amount": round(pending, 2),
-        "status": "active",
-        "created_at": today
-    }
-    
-    loan_dues_collection.insert_one(next_due)
-    
-    # =====================================================
-    # CREATE TRANSACTION RECORDS
-    # =====================================================
-    create_transactions(
-        loan,
-        loan_id,
-        payment_mode,
-        interest_paid,
-        principal_paid,
-        penalty_paid_now,
-        0
-    )
-    
-    # =====================================================
-    # RESPONSE WITH ALL DETAILS
-    # =====================================================
-    return {
-        "type": "BULLET",
-        "scenario": get_payment_scenario(interest_paid, total_interest, principal_paid, penalty_paid_now),
-        "interest_paid": round(interest_paid, 2),
-        "principal_paid": round(principal_paid, 2),
-        "penalty_paid": round(penalty_paid_now, 2),
-        "interest_remaining": round(interest_balance, 2),
-        "principal_remaining": round(principal, 2),
-        "penalty_remaining": round(new_penalty_remaining, 2),
-        "days_covered": days_covered,
-        "total_days": days,
-        "overdue_days": overdue_days,
-        "effective_rate": round(rate + penalty_rate, 2),
-        "daily_interest_rate": round(daily_interest, 4),
-        "new_daily_interest": round(new_daily_interest, 4),
-        "old_interest_start": interest_start,
-        "new_interest_start": new_interest_start,
-        "old_overdue_date": overdue_date,
-        "new_overdue_date": new_overdue_date,
-        "maturity_date": maturity_date,
-        "pending": round(pending, 2),
-        "loan_status": "active",
-        "message": get_payment_message(interest_paid, total_interest, principal_paid, days)
-    }
 
+def create_transactions(loan, loan_id, payment_mode,
+                        interest_paid, principal_paid, penalty_paid, extra):
+    """Create transaction records for payments"""
+    now = datetime.utcnow()
 
-def get_payment_scenario(interest_paid, total_interest, principal_paid, penalty_paid):
-    """
-    Determine which payment scenario occurred
-    """
-    if penalty_paid > 0:
-        return "OVERDUE_PAYMENT_WITH_PENALTY"
-    elif interest_paid == total_interest and principal_paid == 0:
-        return "SCENARIO_1: FULL_INTEREST_PAID"
-    elif interest_paid == total_interest and principal_paid > 0:
-        return "SCENARIO_2: INTEREST_PLUS_PRINCIPAL_REDUCTION"
-    elif 0 < interest_paid < total_interest and principal_paid == 0:
-        return "SCENARIO_3: PARTIAL_INTEREST_PAID"
-    elif interest_paid > 0 and interest_paid < total_interest:
-        return "SCENARIO_4: SMALL_PAYMENT_COVERS_PARTIAL_DAYS"
-    elif interest_paid == 0 and principal_paid > 0:
-        return "SCENARIO_5: DIRECT_PRINCIPAL_REDUCTION_NO_INTEREST"
-    else:
-        return "REGULAR_PAYMENT"
+    def insert(ptype, amt):
+        if amt <= 0:
+            return
+        transactions_collection.insert_one({
+            "loan_id": ObjectId(loan_id),
+            "loan_no": loan.get("loan_no"),
+            "transaction_type": "credit",
+            "payment_type": ptype,
+            "amount": round(amt, 2),
+            "payment_mode": payment_mode,
+            "transaction_date": now,
+            "created_at": now
+        })
 
-
-def get_payment_message(interest_paid, total_interest, principal_paid, days):
-    """
-    Generate user-friendly message
-    """
-    if days == 1 and interest_paid > 0:
-        return f"Payment on Day 1: ₹{interest_paid} interest paid for 1 day + ₹{principal_paid} principal reduction."
-    elif days == 1 and principal_paid > 0:
-        return f"Payment on Day 1: ₹{principal_paid} principal reduced. Future interest will be lower."
-    elif interest_paid == total_interest and principal_paid > 0:
-        return f"Paid ₹{interest_paid} interest for {days} days + ₹{principal_paid} principal reduction."
-    elif interest_paid == total_interest:
-        return f"Paid full interest of ₹{interest_paid} for {days} days. Loan timeline reset."
-    elif interest_paid > 0 and interest_paid < total_interest:
-        days_covered = int(interest_paid / (total_interest / days))
-        return f"Paid ₹{interest_paid} interest covering {days_covered} out of {days} days. Remaining interest continues."
-    else:
-        return "Payment processed successfully."
+    insert("interest paid", interest_paid)
+    insert("principal paid", principal_paid)
+    insert("penalty paid", penalty_paid)
+    if extra > 0:
+        insert("extra payment", extra)

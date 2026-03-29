@@ -15,9 +15,9 @@ loan_dues_collection = db["loan_dues"] #loan dues collection
 
 loans_collection = db["loans"] #loans collection
 
-gold_rates_loans_collection = db["gold_rates_loans"] 
+gold_rate_collection = db["gold_rate"] 
 
-historygoldrateloans_collection = db["historyloans"]
+rate_history_collection = db["rate_history"]
 
 staffs_collection = db["staff"]
 

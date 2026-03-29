@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Reuse the scraper logic you already wrote.
-from services.gold_rate import URL, scrape_gold_rates
+from backend.app.services.goldrate_today import URL, scrape_gold_rates
 
 # Playwright on Windows relies on `asyncio.create_subprocess_exec`.
 # Some event loop policies (notably selector-based) raise NotImplementedError for subprocess support.

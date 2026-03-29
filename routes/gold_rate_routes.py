@@ -1,16 +1,16 @@
 from fastapi import APIRouter, Depends
 from datetime import datetime
 from bson import ObjectId
-from database.db import gold_rates_loans_collection 
-from database.db import historygoldrateloans_collection
+from database.db import gold_rate_collection 
+from database.db import rate_history_collection
 from schemas.gold_rate import GoldLoanSchema, GoldLoanUpdate
 from utils.auth import admin_required
 
 
-router = APIRouter(prefix="/goldratesloans", tags=["gold-rates-loans"])
+router = APIRouter(prefix="/goldrates", tags=["gold-rates"])
 
 
-@router.post("/goldloan_create")
+@router.post("/goldrate_create")
 def create_goldloan(data: GoldLoanSchema, user=Depends(admin_required)):
 
     goldloan_dict = data.dict()
@@ -24,20 +24,20 @@ def create_goldloan(data: GoldLoanSchema, user=Depends(admin_required)):
     goldloan_dict["created_at"] = datetime.utcnow()
     
 
-    gold_rates_loans_collection.insert_one(goldloan_dict)
+    gold_rate_collection.insert_one(goldloan_dict)
 
     # store history also
-    historygoldrateloans_collection.insert_one(goldloan_dict.copy())
+    rate_history_collection.insert_one(goldloan_dict.copy())
 
     return {"message": "Gold loan configuration created successfully"}
 
 
 
 
-@router.put("/goldloan/update/{id}")
+@router.put("/goldrate/update/{id}")
 def update_goldloan(id: str, data: GoldLoanUpdate, user=Depends(admin_required)):
 
-    existing = gold_rates_loans_collection.find_one({"_id": ObjectId(id)})
+    existing = gold_rate_collection.find_one({"_id": ObjectId(id)})
 
     if not existing:
         return {"message": "Gold loan record not found"}
@@ -52,7 +52,7 @@ def update_goldloan(id: str, data: GoldLoanUpdate, user=Depends(admin_required))
 
     update_data["updated_at"] = datetime.utcnow()
 
-    gold_rates_loans_collection.update_one(
+    gold_rate_collection.update_one(
         {"_id": ObjectId(id)},
         {"$set": update_data}
     )
@@ -63,13 +63,13 @@ def update_goldloan(id: str, data: GoldLoanUpdate, user=Depends(admin_required))
     
     history_record.pop("_id", None)
 
-    historygoldrateloans_collection.insert_one(history_record)
+    rate_history_collection.insert_one(history_record)
 
     return {"message": "Gold loan updated successfully"}
 
-@router.get("/goldloans/history")
+@router.get("/goldrate/history")
 def get_goldloan_history(user=Depends(admin_required)):     
-    history = list(historygoldrateloans_collection.find())
+    history = list(rate_history_collection.find())
 
     for record in history:
         record["id"] = str(record["_id"])
@@ -77,9 +77,9 @@ def get_goldloan_history(user=Depends(admin_required)):
 
     return history
 
-@router.get("/goldloans/allcarats")
+@router.get("/goldrate/allcarats")
 def get_goldloan(user=Depends(admin_required)):     
-    carats = list(gold_rates_loans_collection.find())
+    carats = list(rate_history_collection.find())
 
     for carat in carats:
         carat["id"] = str(carat["_id"])
